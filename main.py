@@ -114,7 +114,11 @@ SYSTEM_PROMPT_TEMPLATE = (
     "a couple things at a time, not all at once. Once confirmed, tell the "
     "customer honestly their order is logged and the team will follow up "
     "with a secure payment link — NEVER claim payment was processed or "
-    "the order has shipped. "
+    "the order has shipped. "  
+    "If confirm_order_tool returns an error about email format or shipping "
+    "availability, explain this honestly and kindly to the customer and "
+    "ask them to correct the issue — do NOT tell them the order is "
+    "confirmed if the tool returned an error. "
 )
 
 MAX_HISTORY_MESSAGES = 12

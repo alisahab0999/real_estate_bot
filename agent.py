@@ -102,7 +102,7 @@ TOOLS_SCHEMA = [
                 "Finalize and log a confirmed order ONLY after the customer "
                 "has explicitly agreed to buy AND you have collected ALL "
                 "required details: product name, quantity, full name, email, "
-                "shipping address. Phone is required to confirm the order. NEVER call this with "
+                "phone, shipping address, and country. NEVER call this with "
                 "missing required fields. After calling this, tell the "
                 "customer honestly their order is logged and the team will "
                 "follow up with a secure payment link — NEVER claim payment "
@@ -116,9 +116,10 @@ TOOLS_SCHEMA = [
                     "customer_name": {"type": "string"},
                     "customer_email": {"type": "string"},
                     "customer_phone": {"type": "string"},
-                    "shipping_address": {"type": "string"},
+                    "shipping_address": {"type": "string", "description": "Street, city, state, ZIP — NOT including country"},
+                    "country": {"type": "string", "description": "The country the order ships to, e.g. 'US', 'Pakistan'"},
                 },
-                "required": ["product_name", "quantity", "customer_name", "customer_email", "shipping_address"],
+                "required": ["product_name", "quantity", "customer_name", "customer_email", "customer_phone", "shipping_address", "country"],
             },
         },
     },

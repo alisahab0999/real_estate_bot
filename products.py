@@ -39,17 +39,33 @@ def search_products(
     return response.data
 
 def find_solution(client_id: str, concern: str) -> list[dict]:
-    """Search for products that address a specific customer-stated concern,
-    matching against BOTH the concerns_solved tags and the description text.
-    WHY separate from search_products: this is symptom-to-product matching,
-    a different kind of query than category/price filtering."""
-    safe_concern = concern.replace(",", " ").strip()
+    """Search for products addressing a customer concern. Matches on
+    INDIVIDUAL keywords, not the whole phrase — 'acne and oily skin' now
+    correctly matches products tagged 'acne' OR 'oily skin' even though
+    that exact combined phrase never appears verbatim in the data."""
+    # WHY: strip common filler words so "and", "my", "skin is so" don't
+    # dilute the match — keep the meaningful keywords only.
+    stopwords = {"and", "my", "is", "so", "the", "a", "i", "have", "has", "it", "in"}
+    words = [w.strip(",.!?") for w in concern.lower().split()]
+    keywords = [w for w in words if w and w not in stopwords and len(w) > 2]
+
+    if not keywords:
+        return []
+
+    # WHY: build one OR condition per keyword, checked against BOTH fields
+    # — matches if ANY meaningful word from the customer's phrasing appears
+    # anywhere in the tags or description.
+    conditions = []
+    for kw in keywords:
+        conditions.append(f"concerns_solved.ilike.%{kw}%")
+        conditions.append(f"description.ilike.%{kw}%")
+
     response = (
         supabase.table("products")
         .select("*")
         .eq("client_id", client_id)
         .eq("in_stock", True)
-        .or_(f"concerns_solved.ilike.%{safe_concern}%,description.ilike.%{safe_concern}%")
+        .or_(",".join(conditions))
         .execute()
     )
     return response.data

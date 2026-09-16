@@ -18,30 +18,42 @@ def confirm_order(
     quantity: int,
     customer_name: str,
     customer_email: str,
+    customer_phone: str,
     shipping_address: str,
-    customer_phone: str ,
+    country: str,
 ) -> dict:
+    # WHY: hard validation in CODE, not just a prompt instruction — this is
+    # too consequential (a real unfulfillable order) to trust the model
+    # alone to remember. This is the same philosophy as Phase 4's order
+    # security check: never trust the model to self-enforce a hard rule.
+    import re
+    if not re.match(r"[^@]+@[^@]+\.[^@]+", customer_email):
+        return {"error": "invalid_email", "message": "That email address doesn't look valid — please double check it."}
+
+    client_resp = supabase.table("clients").select("shipping_countries").eq("client_id", client_id).execute()
+    allowed = client_resp.data[0]["shipping_countries"] if client_resp.data else "US"
+    allowed_list = [c.strip().lower() for c in allowed.split(",")]
+
+    if country.strip().lower() not in allowed_list and country.strip().lower() not in ("us", "usa", "united states"):
+        return {
+            "error": "not_serviceable",
+            "message": f"Sorry, we currently only ship within: {allowed}. We can't ship to {country} yet.",
+        }
+
     result = (
         supabase.table("confirmed_orders")
         .insert({
-            "client_id": client_id,
-            "session_id": session_id,
-            "product_name": product_name,
-            "quantity": quantity,
-            "customer_name": customer_name,
-            "customer_email": customer_email,
-            "customer_phone": customer_phone,
-            "shipping_address": shipping_address,
+            "client_id": client_id, "session_id": session_id, "product_name": product_name,
+            "quantity": quantity, "customer_name": customer_name, "customer_email": customer_email,
+            "customer_phone": customer_phone, "shipping_address": f"{shipping_address}, {country}",
             "status": "pending",
         })
         .execute()
     )
     order_row = result.data[0]
 
-    # WHY: notify n8n only if this client has configured a webhook — keeps
-    # the flow optional per client, no crash if it's not set up yet.
-    client_resp = supabase.table("clients").select("n8n_webhook_url").eq("client_id", client_id).execute()
-    webhook_url = client_resp.data[0].get("n8n_webhook_url") if client_resp.data else None
+    client_resp2 = supabase.table("clients").select("n8n_webhook_url").eq("client_id", client_id).execute()
+    webhook_url = client_resp2.data[0].get("n8n_webhook_url") if client_resp2.data else None
     if webhook_url:
         try:
             httpx.post(webhook_url, json=order_row, timeout=5)
