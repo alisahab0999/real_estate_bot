@@ -235,7 +235,7 @@ def health():
 # running app reads from for every /chat request.
 @app.on_event("startup")
 def ingest_on_startup():
-    known_clients = ["client_shoestore", "client_bookstore", "client_teethwhite"]
+    known_clients = ["client_shoestore", "client_bookstore", "client_teethwhite", "client_glowlab"]
 
     for client_id in known_clients:
         collection_name = f"policies_{client_id}"
