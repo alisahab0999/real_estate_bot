@@ -101,7 +101,7 @@ TOOLS_SCHEMA = [
             "description": (
                 "Finalize and log a confirmed order ONLY after the customer "
                 "has explicitly agreed to buy AND you have collected ALL "
-                "required details: product name, quantity, full name, email, "
+                "required details: product name, quantity, full name, correct format email,"
                 "phone, shipping address, and country. NEVER call this with "
                 "missing required fields. After calling this, tell the "
                 "customer honestly their order is logged and the team will "
