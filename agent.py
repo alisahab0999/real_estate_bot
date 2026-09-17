@@ -1,29 +1,34 @@
 # agent.py
-# WHAT: LangGraph agent with 5 tools — product search, policy RAG, order
-# lookup, lead capture, and human escalation — now fully MULTI-TENANT.
+# WHAT: LangGraph agent with 7 tools — product search, concern-based
+# solution finding, order confirmation, policy RAG, order lookup, lead
+# capture, and human escalation — fully MULTI-TENANT.
 # WHY: client_id lives in AgentState (same pattern as session_id from
 # Phase 5) and is injected into every tool call from tools_node, never
-# from the model. Model name updated to openai/gpt-oss-120b since
-# llama-3.3-70b-versatile is no longer available on this account. Tool
-# calling made more robust against model quirks: tools are OMITTED from
-# the request entirely (not just soft-disabled via tool_choice="none")
-# once one round has happened, and a BadRequestError from a hallucinated/
-# malformed tool name triggers one graceful retry without tools.
+# from the model. Model is openai/gpt-oss-120b since llama-3.3-70b-
+# versatile is no longer available on this account. Tool calling made
+# more robust against model quirks: tools are OMITTED from the request
+# entirely (not just soft-disabled via tool_choice="none") once one round
+# has happened, a BadRequestError from a hallucinated/malformed tool name
+# triggers one graceful retry without tools, and a NEW check catches
+# "degenerate" garbage output (repeated dots/punctuation loops) that
+# Groq returns as a normal successful response — not an exception — so
+# we have to detect it ourselves after the fact.
 
 import os
 import json
+import re
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 from groq import Groq, BadRequestError
 import chromadb
 from langgraph.graph import StateGraph, END
 
-from products import search_products
+from products import search_products, find_solution
 from orders import lookup_order
 from leads import save_lead
 from escalations import flag_for_human
-from products import search_products, find_solution
 from confirmed_orders import confirm_order
+
 load_dotenv()
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
@@ -36,9 +41,6 @@ def add_dicts(left: list[dict], right: list[dict]) -> list[dict]:
 
 
 def retrieve_policy_info(client_id: str, query: str) -> list[dict]:
-    # WHY: Opens a COLLECTION SCOPED TO THIS CLIENT ONLY — e.g.
-    # "policies_client_shoestore" — so Client A's policy text can never be
-    # retrieved by Client B's chatbot, even if the query text overlaps.
     collection = chroma_client.get_collection(f"policies_{client_id}")
     results = collection.query(query_texts=[query], n_results=2)
     chunks = []
@@ -82,7 +84,7 @@ TOOLS_SCHEMA = [
                 "specific customer concern (e.g. 'acne', 'dry skin', 'dark "
                 "spots.etc'). Use this when a customer describes a problem they "
                 "want solved. If the concern is vague, ask ONE brief "
-                "clarifying question first (like skin type or main symptom) you have to be completely sure about the problem"
+                "clarifying question first (like skin type or main symptom) you have to be completely sure about the problem "
                 "before calling this tool."
             ),
             "parameters": {
@@ -101,7 +103,7 @@ TOOLS_SCHEMA = [
             "description": (
                 "Finalize and log a confirmed order ONLY after the customer "
                 "has explicitly agreed to buy AND you have collected ALL "
-                "required details: product name, quantity, full name, correct format email,"
+                "required details: product name, quantity, full name, correct format email, "
                 "phone, shipping address, and country. NEVER call this with "
                 "missing required fields. After calling this, tell the "
                 "customer honestly their order is logged and the team will "
@@ -223,7 +225,23 @@ TOOLS_SCHEMA = [
 class AgentState(TypedDict):
     messages: Annotated[list[dict], add_dicts]
     session_id: str
-    client_id: str  # NEW in Phase 8 — travels through state, never from the model
+    client_id: str
+
+
+def is_degenerate_response(text: str) -> bool:
+    """Detects the repetition/garbage-output failure mode — long runs of
+    '...' or repeated punctuation instead of real words. WHY: this is a
+    'successful' API response, not an exception Groq raises, so we have
+    to catch it ourselves after the fact — a tool never sees this, since
+    the corruption happens in the model's own text generation."""
+    if not text:
+        return False
+    if len(text) > 2000:
+        return True
+    suspicious_runs = re.findall(r'(?:[.\s…]{2,}){5,}', text)
+    if suspicious_runs:
+        return True
+    return False
 
 
 def agent_node(state: AgentState) -> dict:
@@ -236,39 +254,43 @@ def agent_node(state: AgentState) -> dict:
     )
     allow_tools = tool_calls_this_turn < 4
 
-    create_kwargs = {
+    base_kwargs = {
         "model": "openai/gpt-oss-120b",
         "messages": state["messages"],
         "temperature": 0.3,
+        # WHY: discourages the model from repeating the same tokens —
+        # directly targets the root cause of the repetition-loop glitch.
+        "frequency_penalty": 0.4,
+        "presence_penalty": 0.3,
+        # WHY: hard ceiling on response length — even if degeneration still
+        # happens, it can never produce a multi-thousand-character wall of
+        # garbage again.
+        "max_tokens": 500,
     }
+    create_kwargs = dict(base_kwargs)
     if allow_tools:
         create_kwargs["tools"] = TOOLS_SCHEMA
         create_kwargs["tool_choice"] = "auto"
 
+    message = None
     try:
         response = groq_client.chat.completions.create(**create_kwargs)
         message = response.choices[0].message
-    except BadRequestError as e:
-        print(f"[agent_node] First attempt failed: {e}")
+        if message.content and not message.tool_calls and is_degenerate_response(message.content):
+            raise ValueError("Degenerate output detected")
+    except (BadRequestError, ValueError) as e:
+        print(f"[agent_node] First attempt failed/degenerate: {e}")
         try:
-            # WHY: Retry once, explicitly forcing tool_choice="none" AS WELL
-            # AS omitting tools — belt and suspenders against this model's
-            # apparent tendency to emit tool-call-shaped output regardless.
-            response = groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=state["messages"],
-                temperature=0.1,  # WHY: lower temperature to reduce erratic output further
-            )
+            retry_kwargs = dict(base_kwargs)
+            retry_kwargs["temperature"] = 0.2
+            response = groq_client.chat.completions.create(**retry_kwargs)
             message = response.choices[0].message
-        except BadRequestError as e2:
-            # WHY: FINAL safety net — if the model fails even on a plain
-            # retry, we construct a fallback message ourselves rather than
-            # letting the exception crash the whole /chat request. A
-            # customer-facing bot must NEVER hard-crash; a generic honest
-            # response is always better than a 500 error.
-            print(f"[agent_node] Retry also failed: {e2}")
+            if message.content and not message.tool_calls and is_degenerate_response(message.content):
+                raise ValueError("Degenerate output on retry too")
+        except (BadRequestError, ValueError) as e2:
+            print(f"[agent_node] Retry also failed/degenerate: {e2}")
             message = type("obj", (), {
-                "content": "I'm having trouble processing that right now — could you rephrase your question?",
+                "content": "Sorry, I ran into a glitch processing that — could you repeat your last message?",
                 "tool_calls": None,
             })()
 
@@ -287,10 +309,6 @@ def agent_node(state: AgentState) -> dict:
 
 
 def tools_node(state: AgentState) -> dict:
-    # WHY: Every tool is explicitly branched here (instead of a generic
-    # AVAILABLE_TOOLS dict lookup) because every single tool now needs
-    # client_id injected from STATE, not from model-provided arguments —
-    # the model must never be able to specify which client's data to touch.
     last_message = state["messages"][-1]
     tool_messages = []
     client_id = state["client_id"]
@@ -315,10 +333,6 @@ def tools_node(state: AgentState) -> dict:
         elif name == "confirm_order_tool":
             result = confirm_order(client_id=client_id, session_id=session_id, **args)
         else:
-            # WHY: Defensive fallback — if the model somehow calls a tool
-            # name that matches none of ours (e.g. a hallucinated name that
-            # slipped past the BadRequestError retry), report that clearly
-            # instead of crashing with a KeyError.
             result = {"error": f"Unknown tool: {name}"}
 
         tool_messages.append({
