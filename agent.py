@@ -23,11 +23,11 @@ from groq import Groq, BadRequestError
 import chromadb
 from langgraph.graph import StateGraph, END
 
-from products import search_products, find_solution
 from orders import lookup_order
 from leads import save_lead
 from escalations import flag_for_human
-from confirmed_orders import confirm_order
+from properties import search_properties, find_property_match
+from showings import schedule_showing
 
 load_dotenv()
 
@@ -56,75 +56,76 @@ def retrieve_policy_info(client_id: str, query: str) -> list[dict]:
 
 
 TOOLS_SCHEMA = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_products_tool",
-            "description": (
-                "Search the store's product catalog by category and/or maximum "
-                "price. Use this whenever the customer asks to find, browse, or "
-                "get recommendations for products."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "category": {"type": ["string", "null"], "description": "Product category, e.g. 'shoes', 'shirts', 'jackets'. Use null if not filtering by category."},
-                    "max_price": {"type": ["number", "null"], "description": "Maximum price filter in USD. Use null if not filtering by price."},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "find_solution_tool",
-            "description": (
-                "Search the product catalog for a product that addresses a "
-                "specific customer concern (e.g. 'acne', 'dry skin', 'dark "
-                "spots.etc'). Use this when a customer describes a problem they "
-                "want solved. If the concern is vague, ask ONE brief "
-                "clarifying question first (like skin type or main symptom) you have to be completely sure about the problem "
-                "before calling this tool."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "concern": {"type": "string", "description": "The customer's stated concern, in a few words"},
-                },
-                "required": ["concern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "confirm_order_tool",
-            "description": (
-                "Finalize and log a confirmed order ONLY after the customer "
-                "has explicitly agreed to buy AND you have collected ALL "
-                "required details: product name, quantity, full name, correct format email, "
-                "phone, shipping address, and country. NEVER call this with "
-                "missing required fields. After calling this, tell the "
-                "customer honestly their order is logged and the team will "
-                "follow up with a secure payment link — NEVER claim payment "
-                "was processed."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "product_name": {"type": "string"},
-                    "quantity": {"type": "number"},
-                    "customer_name": {"type": "string"},
-                    "customer_email": {"type": "string"},
-                    "customer_phone": {"type": "string"},
-                    "shipping_address": {"type": "string", "description": "Street, city, state, ZIP — NOT including country"},
-                    "country": {"type": "string", "description": "The country the order ships to, e.g. 'US', 'Pakistan'"},
-                },
-                "required": ["product_name", "quantity", "customer_name", "customer_email", "customer_phone", "shipping_address", "country"],
-            },
-        },
-    },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "search_products_tool",
+    #         "description": (
+    #             "Search the store's product catalog by category and/or maximum "
+    #             "price. Use this whenever the customer asks to find, browse, or "
+    #             "get recommendations for products."
+    #         ),
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "category": {"type": ["string", "null"], "description": "Product category, e.g. 'shoes', 'shirts', 'jackets'. Use null if not filtering by category."},
+    #                 "max_price": {"type": ["number", "null"], "description": "Maximum price filter in USD. Use null if not filtering by price."},
+    #             },
+    #             "required": [],
+    #         },
+    #     },
+    # },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "find_solution_tool",
+    #         "description": (
+    #             "Search the product catalog for a product that addresses a "
+    #             "specific customer concern (e.g. 'acne', 'dry skin', 'dark "
+    #             "spots.etc'). Use this when a customer describes a problem they "
+    #             "want solved. If the concern is vague, ask ONE brief "
+    #             "clarifying question first (like skin type or main symptom) you have to be completely sure about the problem "
+    #             "before calling this tool."
+    #         ),
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "concern": {"type": "string", "description": "The customer's stated concern, in a few words"},
+    #             },
+    #             "required": ["concern"],
+    #         },
+    #     },
+    # },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "confirm_order_tool",
+    #         "description": (
+    #             "Finalize and log a confirmed order ONLY after the customer "
+    #             "has explicitly agreed to buy AND you have collected ALL "
+    #             "required details: product name, quantity, full name, correct format email, "
+    #             "phone, shipping address, and country. NEVER call this with "
+    #             "missing required fields. After calling this, tell the "
+    #             "customer honestly their order is logged and the team will "
+    #             "follow up with a secure payment link — NEVER claim payment "
+    #             "was processed."
+    #         ),
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "product_name": {"type": "string"},
+    #                 "quantity": {"type": "number"},
+    #                 "customer_name": {"type": "string"},
+    #                 "customer_email": {"type": "string"},
+    #                 "customer_phone": {"type": "string"},
+    #                 "shipping_address": {"type": "string", "description": "Street, city, state, ZIP — NOT including country"},
+    #                 "country": {"type": "string", "description": "The country the order ships to, e.g. 'US', 'Pakistan'"},
+    #             },
+    #             "required": ["product_name", "quantity", "customer_name", "customer_email", "customer_phone", "shipping_address", "country"],
+    #         },
+    #     },
+    # },
+    
     {
         "type": "function",
         "function": {
@@ -141,6 +142,55 @@ TOOLS_SCHEMA = [
                     "query": {"type": "string", "description": "The customer's question, used to search policy documents semantically"},
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_properties_tool",
+            "description": "Search available property listings by type, city, price range, or bedrooms.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "listing_type": {"type": ["string", "null"], "description": "'sale' or 'rent'"},
+                    "city": {"type": ["string", "null"]},
+                    "min_price": {"type": ["number", "null"]},
+                    "max_price": {"type": ["number", "null"]},
+                    "bedrooms": {"type": ["number", "null"]},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_property_match_tool",
+            "description": "Search for properties matching a customer's described needs (e.g. '3 bedroom under 400k near downtown with a yard'). If vague, ask ONE clarifying question first (budget, location, bedrooms) before calling this.",
+            "parameters": {
+                "type": "object",
+                "properties": {"needs": {"type": "string"}},
+                "required": ["needs"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_showing_tool",
+            "description": "Book a property showing ONLY after collecting property address, full name, email, phone, preferred date, and preferred time. Never call with missing fields. After calling, tell the customer honestly the request is logged and the agent will confirm — NEVER claim the showing is confirmed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "property_address": {"type": "string"},
+                    "customer_name": {"type": "string"},
+                    "customer_email": {"type": "string"},
+                    "customer_phone": {"type": "string"},
+                    "preferred_date": {"type": "string"},
+                    "preferred_time": {"type": "string"},
+                },
+                "required": ["property_address", "customer_name", "customer_email", "customer_phone", "preferred_date", "preferred_time"],
             },
         },
     },
@@ -318,9 +368,9 @@ def tools_node(state: AgentState) -> dict:
         name = tool_call["function"]["name"]
         args = json.loads(tool_call["function"]["arguments"])
 
-        if name == "search_products_tool":
-            result = search_products(client_id=client_id, **args)
-        elif name == "retrieve_policy_tool":
+        # if name == "search_products_tool":
+        #     result = search_products(client_id=client_id, **args)
+        if name == "retrieve_policy_tool":
             result = retrieve_policy_info(client_id=client_id, **args)
         elif name == "lookup_order_tool":
             result = lookup_order(client_id=client_id, **args)
@@ -328,10 +378,12 @@ def tools_node(state: AgentState) -> dict:
             result = save_lead(client_id=client_id, session_id=session_id, **args)
         elif name == "flag_for_human_tool":
             result = flag_for_human(client_id=client_id, session_id=session_id, **args)
-        elif name == "find_solution_tool":
-            result = find_solution(client_id=client_id, **args)
-        elif name == "confirm_order_tool":
-            result = confirm_order(client_id=client_id, session_id=session_id, **args)
+        elif name == "search_properties_tool":
+            result = search_properties(client_id=client_id, **args)
+        elif name == "find_property_match_tool":
+            result = find_property_match(client_id=client_id, **args)
+        elif name == "schedule_showing_tool":
+            result = schedule_showing(client_id=client_id, session_id=session_id, **args)
         else:
             result = {"error": f"Unknown tool: {name}"}
 

@@ -1,10 +1,7 @@
 # leads.py
-# WHAT: Incremental lead capture — saves/updates partial customer info
-# tied to a (client_id, session_id) pair, in Supabase.
-# WHY (Phase 8 update): client_id added to BOTH save_lead and get_lead —
-# a session_id alone is no longer sufficient to identify a lead, since
-# different clients could theoretically have colliding session_ids.
-
+# WHAT: Incremental lead capture — now extended with real-estate-specific
+# fields (budget, timeline, financing status, buying vs renting), merged
+# the same non-destructive way as name/email/phone/interest.
 import os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -25,6 +22,12 @@ def save_lead(
     email: str | None = None,
     phone: str | None = None,
     interest: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    preferred_locations: str | None = None,
+    timeline: str | None = None,
+    financing_status: str | None = None,
+    buying_or_renting: str | None = None,
 ) -> dict:
     existing = (
         supabase.table("leads")
@@ -43,6 +46,12 @@ def save_lead(
         "email": email or current.get("email"),
         "phone": phone or current.get("phone"),
         "interest": interest or current.get("interest"),
+        "budget_min": budget_min if budget_min is not None else current.get("budget_min"),
+        "budget_max": budget_max if budget_max is not None else current.get("budget_max"),
+        "preferred_locations": preferred_locations or current.get("preferred_locations"),
+        "timeline": timeline or current.get("timeline"),
+        "financing_status": financing_status or current.get("financing_status"),
+        "buying_or_renting": buying_or_renting or current.get("buying_or_renting"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -56,8 +65,6 @@ def save_lead(
 
 
 def get_lead(client_id: str, session_id: str) -> dict | None:
-    # WHY: Now filters by BOTH client_id and session_id — matches the
-    # composite primary key set up on the leads table in Step 1.
     response = (
         supabase.table("leads")
         .select("*")
