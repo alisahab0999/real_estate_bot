@@ -10,7 +10,7 @@
   // origin), embed.js runs on the CLIENT'S website, a completely different
   // domain. It has no way to know your server's address unless we spell
   // it out explicitly here.
-  const WIDGET_BASE_URL = "https://web-production-29003.up.railway.app";
+  const WIDGET_BASE_URL = "https://realestatebot-production-1ca9.up.railway.app";
 
   if (window.__storeChatWidgetLoaded) return;
   window.__storeChatWidgetLoaded = true;
