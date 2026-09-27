@@ -56,7 +56,7 @@ SESSIONS: dict[tuple[str, str], list[dict]] = {}
 # Keyed by the RAW api_key string (checked even before it's validated as a
 # real client) so a brute-force key-guessing attempt is also throttled, not
 # just legitimate-but-excessive traffic from a real client.
-RATE_LIMIT_MAX_REQUESTS = 3     # per key, per window
+RATE_LIMIT_MAX_REQUESTS = 60     # per key, per window
 RATE_LIMIT_WINDOW_SECONDS = 60
 
 _rate_limit_lock = threading.Lock()
